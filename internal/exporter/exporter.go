@@ -137,19 +137,72 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 }
 
 // Collect fetches the stats from Starlink dish and delivers them as Prometheus metrics.
+// grpcCallWithRetry executes a gRPC call with a single retry on failure.
+func (e *Exporter) grpcCallWithRetry(req *device.Request) (*device.Response, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
+		resp, err := e.Client.Handle(ctx, req)
+		cancel()
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if attempt == 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	return nil, lastErr
+}
+
 // It implements prometheus.Collector.
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
-	ok := e.collectDishStatus(ch)
-	ok = ok && e.collectDishLocation(ch)
-	ok = ok && e.collectDishObstructionStatus(ch)
-	ok = ok && e.collectDishObstructionMap(ch)
-	ok = ok && e.collectDishAlerts(ch)
-	ok = ok && e.collectDishConfig(ch)
-	ok = ok && e.collectAlignmentStats(ch)
-	ok = ok && e.collectDishDiagnostics(ch)
-	ok = ok && e.collectDishPower(ch)
+	// Fetch GetStatus once — used by 4 collectors
+	statusResp, statusErr := e.grpcCallWithRetry(&device.Request{
+		Request: &device.Request_GetStatus{},
+	})
+	if statusErr != nil {
+		log.Errorf("gRPC GetStatus failed: %s", statusErr.Error())
+	}
 
-	if ok {
+	allOk := true
+
+	// Collections that depend on GetStatus
+	if statusErr == nil {
+		if !e.collectDishStatusFromResp(ch, statusResp) {
+			allOk = false
+		}
+		if !e.collectDishObstructionStatusFromResp(ch, statusResp) {
+			allOk = false
+		}
+		if !e.collectDishAlertsFromResp(ch, statusResp) {
+			allOk = false
+		}
+		if !e.collectAlignmentStatsFromResp(ch, statusResp) {
+			allOk = false
+		}
+	} else {
+		allOk = false
+	}
+
+	// Independent collections — each makes its own gRPC call
+	if !e.collectDishLocation(ch) {
+		allOk = false
+	}
+	if !e.collectDishObstructionMap(ch) {
+		allOk = false
+	}
+	if !e.collectDishConfig(ch) {
+		allOk = false
+	}
+	if !e.collectDishDiagnostics(ch) {
+		allOk = false
+	}
+	if !e.collectDishPower(ch) {
+		allOk = false
+	}
+
+	if allOk {
 		ch <- prometheus.MustNewConstMetric(
 			dishUp, prometheus.GaugeValue, 1.0,
 		)
@@ -160,19 +213,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-func (e *Exporter) collectDishStatus(ch chan<- prometheus.Metric) bool {
-	req := &device.Request{
-		Request: &device.Request_GetStatus{},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
-	defer cancel()
-	resp, err := e.Client.Handle(ctx, req)
-	if err != nil {
-		log.Errorf("gRPC GetStatus failed: %s", err.Error())
-		return false
-	}
-
+func (e *Exporter) collectDishStatusFromResp(ch chan<- prometheus.Metric, resp *device.Response) bool {
 	dishStatus := resp.GetDishGetStatus()
 	dishI := dishStatus.GetDeviceInfo()
 	dishB := dishI.GetBoot()
@@ -317,13 +358,9 @@ func (e *Exporter) collectDishStatus(ch chan<- prometheus.Metric) bool {
 }
 
 func (e *Exporter) collectDishConfig(ch chan<- prometheus.Metric) bool {
-	req := &device.Request{
+	resp, err := e.grpcCallWithRetry(&device.Request{
 		Request: &device.Request_DishGetConfig{},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
-	defer cancel()
-	resp, err := e.Client.Handle(ctx, req)
+	})
 	if err != nil {
 		log.Errorf("gRPC DishGetConfig failed: %s", err.Error())
 		return false
@@ -341,14 +378,9 @@ func (e *Exporter) collectDishConfig(ch chan<- prometheus.Metric) bool {
 }
 
 func (e *Exporter) collectDishLocation(ch chan<- prometheus.Metric) bool {
-	req := &device.Request{
+	resp, err := e.grpcCallWithRetry(&device.Request{
 		Request: &device.Request_GetLocation{},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
-	defer cancel()
-
-	resp, err := e.Client.Handle(ctx, req)
+	})
 	if err != nil {
 		log.Errorf("gRPC GetLocation failed: %s", err.Error())
 		// don't return false since location service might not be enabled
@@ -381,19 +413,7 @@ func (e *Exporter) collectDishLocation(ch chan<- prometheus.Metric) bool {
 	return true
 }
 
-func (e *Exporter) collectDishObstructionStatus(ch chan<- prometheus.Metric) bool {
-	req := &device.Request{
-		Request: &device.Request_GetStatus{},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
-	defer cancel()
-	resp, err := e.Client.Handle(ctx, req)
-	if err != nil {
-		log.Errorf("gRPC GetStatus failed: %s", err.Error())
-		return false
-	}
-
+func (e *Exporter) collectDishObstructionStatusFromResp(ch chan<- prometheus.Metric, resp *device.Response) bool {
 	obstructions := resp.GetDishGetStatus().GetObstructionStats()
 
 	ch <- prometheus.MustNewConstMetric(
@@ -425,15 +445,11 @@ func (e *Exporter) collectDishObstructionStatus(ch chan<- prometheus.Metric) boo
 }
 
 func (e *Exporter) collectDishObstructionMap(ch chan<- prometheus.Metric) bool {
-	req := &device.Request{
+	resp, err := e.grpcCallWithRetry(&device.Request{
 		Request: &device.Request_DishGetObstructionMap{},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
-	defer cancel()
-	resp, err := e.Client.Handle(ctx, req)
+	})
 	if err != nil {
-		log.Errorf("gRPC GetStatus failed: %s", err.Error())
+		log.Errorf("gRPC DishGetObstructionMap failed: %s", err.Error())
 		return false
 	}
 
@@ -494,15 +510,11 @@ func (e *Exporter) collectDishObstructionMap(ch chan<- prometheus.Metric) bool {
 }
 
 func (e *Exporter) collectDishDiagnostics(ch chan<- prometheus.Metric) bool {
-	req := &device.Request{
+	resp, err := e.grpcCallWithRetry(&device.Request{
 		Request: &device.Request_GetDiagnostics{},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
-	defer cancel()
-	resp, err := e.Client.Handle(ctx, req)
+	})
 	if err != nil {
-		log.Errorf("gRPC GetStatus failed: %s", err.Error())
+		log.Errorf("gRPC GetDiagnostics failed: %s", err.Error())
 		return false
 	}
 
@@ -516,18 +528,7 @@ func (e *Exporter) collectDishDiagnostics(ch chan<- prometheus.Metric) bool {
 	return true
 }
 
-func (e *Exporter) collectDishAlerts(ch chan<- prometheus.Metric) bool {
-	req := &device.Request{
-		Request: &device.Request_GetStatus{},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
-	defer cancel()
-	resp, err := e.Client.Handle(ctx, req)
-	if err != nil {
-		log.Errorf("gRPC GetStatus failed: %s", err.Error())
-		return false
-	}
+func (e *Exporter) collectDishAlertsFromResp(ch chan<- prometheus.Metric, resp *device.Response) bool {
 	alerts := resp.GetDishGetStatus().GetAlerts()
 
 	ch <- prometheus.MustNewConstMetric(
@@ -582,18 +583,7 @@ func (e *Exporter) collectDishAlerts(ch chan<- prometheus.Metric) bool {
 	return true
 }
 
-func (e *Exporter) collectAlignmentStats(ch chan<- prometheus.Metric) bool {
-	req := &device.Request{
-		Request: &device.Request_GetStatus{},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
-	defer cancel()
-	resp, err := e.Client.Handle(ctx, req)
-	if err != nil {
-		log.Errorf("gRPC GetStatus failed: %s", err.Error())
-		return false
-	}
+func (e *Exporter) collectAlignmentStatsFromResp(ch chan<- prometheus.Metric, resp *device.Response) bool {
 	alignmentStats := resp.GetDishGetStatus().GetAlignmentStats()
 
 	ch <- prometheus.MustNewConstMetric(
@@ -612,15 +602,11 @@ func (e *Exporter) collectAlignmentStats(ch chan<- prometheus.Metric) bool {
 }
 
 func (e *Exporter) collectDishPower(ch chan<- prometheus.Metric) bool {
-	req := &device.Request{
+	resp, err := e.grpcCallWithRetry(&device.Request{
 		Request: &device.Request_GetHistory{},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
-	defer cancel()
-	resp, err := e.Client.Handle(ctx, req)
+	})
 	if err != nil {
-		log.Errorf("gRPC GetStatus failed: %s", err.Error())
+		log.Errorf("gRPC GetHistory failed: %s", err.Error())
 		return false
 	}
 	history := resp.GetDishGetHistory()

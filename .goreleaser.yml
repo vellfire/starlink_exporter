@@ -20,7 +20,7 @@ builds:
       - arm
       - arm64
     goarm:
-      - 7
+      - "7"
 
 archives:
   - name_template: >-
