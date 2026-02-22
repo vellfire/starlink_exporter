@@ -26,10 +26,11 @@ type Exporter struct {
 
 	DishID      string
 	CountryCode string
+	Timeout     time.Duration
 }
 
 // New returns an initialized Exporter.
-func New(address string) (*Exporter, error) {
+func New(address string, timeout time.Duration) (*Exporter, error) {
 	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("connect to Starlink dish gRPC interface failed: %s", err.Error())
@@ -43,7 +44,7 @@ func New(address string) (*Exporter, error) {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	client := device.NewDeviceClient(conn)
@@ -64,6 +65,7 @@ func New(address string) (*Exporter, error) {
 		Client:      client,
 		DishID:      deviceInfo.GetId(),
 		CountryCode: deviceInfo.GetCountryCode(),
+		Timeout:     timeout,
 	}, nil
 }
 
@@ -163,7 +165,7 @@ func (e *Exporter) collectDishStatus(ch chan<- prometheus.Metric) bool {
 		Request: &device.Request_GetStatus{},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
 	defer cancel()
 	resp, err := e.Client.Handle(ctx, req)
 	if err != nil {
@@ -319,7 +321,7 @@ func (e *Exporter) collectDishConfig(ch chan<- prometheus.Metric) bool {
 		Request: &device.Request_DishGetConfig{},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
 	defer cancel()
 	resp, err := e.Client.Handle(ctx, req)
 	if err != nil {
@@ -343,7 +345,7 @@ func (e *Exporter) collectDishLocation(ch chan<- prometheus.Metric) bool {
 		Request: &device.Request_GetLocation{},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
 	defer cancel()
 
 	resp, err := e.Client.Handle(ctx, req)
@@ -384,7 +386,7 @@ func (e *Exporter) collectDishObstructionStatus(ch chan<- prometheus.Metric) boo
 		Request: &device.Request_GetStatus{},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
 	defer cancel()
 	resp, err := e.Client.Handle(ctx, req)
 	if err != nil {
@@ -427,7 +429,7 @@ func (e *Exporter) collectDishObstructionMap(ch chan<- prometheus.Metric) bool {
 		Request: &device.Request_DishGetObstructionMap{},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
 	defer cancel()
 	resp, err := e.Client.Handle(ctx, req)
 	if err != nil {
@@ -496,7 +498,7 @@ func (e *Exporter) collectDishDiagnostics(ch chan<- prometheus.Metric) bool {
 		Request: &device.Request_GetDiagnostics{},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
 	defer cancel()
 	resp, err := e.Client.Handle(ctx, req)
 	if err != nil {
@@ -519,7 +521,7 @@ func (e *Exporter) collectDishAlerts(ch chan<- prometheus.Metric) bool {
 		Request: &device.Request_GetStatus{},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
 	defer cancel()
 	resp, err := e.Client.Handle(ctx, req)
 	if err != nil {
@@ -585,7 +587,7 @@ func (e *Exporter) collectAlignmentStats(ch chan<- prometheus.Metric) bool {
 		Request: &device.Request_GetStatus{},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
 	defer cancel()
 	resp, err := e.Client.Handle(ctx, req)
 	if err != nil {
@@ -614,7 +616,7 @@ func (e *Exporter) collectDishPower(ch chan<- prometheus.Metric) bool {
 		Request: &device.Request_GetHistory{},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeout(context.Background(), e.Timeout)
 	defer cancel()
 	resp, err := e.Client.Handle(ctx, req)
 	if err != nil {

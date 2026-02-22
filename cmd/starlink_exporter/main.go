@@ -23,6 +23,7 @@ const (
 func main() {
 	port := flag.String("port", "9817", "listening port to expose metrics on")
 	address := flag.String("address", exporter.DishAddress, "IP address and port to reach dish")
+	timeout := flag.Duration("timeout", 15*time.Second, "gRPC request timeout")
 	flag.Parse()
 
 	if os.Getenv("STARLINK_GRPC_ADDR_PORT") != "" {
@@ -35,7 +36,7 @@ func main() {
 	retryDelay := 1
 
 	for {
-		exporterClient, err = exporter.New(*address)
+		exporterClient, err = exporter.New(*address, *timeout)
 		if err == nil {
 			break
 		}
